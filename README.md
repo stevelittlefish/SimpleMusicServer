@@ -94,5 +94,3 @@ They use a temporary library to check throttled downloads, waveform generation, 
 ## Licence
 
 Released under the **DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE, Version 2**. See [LICENCE](LICENCE) for the complete, highly serious corporate legal framework, obviously carefully designed by a crack team of lawyers.
-
-The licence text is copied from [comfyui-avatar-generator](https://github.com/stevelittlefish/comfyui-avatar-generator/blob/main/LICENCE).
