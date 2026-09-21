@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -18,6 +20,12 @@ func TestLibraryAndStreaming(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(data, name), []byte("0123456789"), 0644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.Mkdir(filepath.Join(data, ".cache"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(data, ".cache", "hidden.mp3"), []byte("cache"), 0644); err != nil {
+		t.Fatal(err)
 	}
 	h := handler(data)
 	request := func(path string) *httptest.ResponseRecorder {
@@ -34,7 +42,14 @@ func TestLibraryAndStreaming(t *testing.T) {
 		t.Fatalf("unexpected tracks: %+v", tracks)
 	}
 	for _, track := range tracks {
-		r := httptest.NewRequest("GET", track.URL, nil)
+		prefix := "/audio/"
+		if compressed(track.Name) {
+			prefix = "/stream/"
+		}
+		if !strings.HasPrefix(track.URL, prefix) || !strings.Contains(track.URL, "?v=") {
+			t.Fatalf("incorrect playback URL: %s", track.URL)
+		}
+		r := httptest.NewRequest("GET", (&url.URL{Path: "/audio/" + track.Name}).String(), nil)
 		r.Header.Set("Range", "bytes=2-5")
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)

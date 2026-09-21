@@ -4,7 +4,9 @@ const audio = $('audio');
 const canvas = $('wave');
 const ctx = canvas.getContext('2d');
 let tracks = [], current = -1, peaks = null, advanceTimer = null;
-let generation = 0, waveRequest = null, audioContext = null;
+let generation = 0, loading = false, wantsPlay = false;
+// Retain only the current and next compressed files, not the entire library.
+const downloads = new Map();
 const duration = () => Number.isFinite(audio.duration) ? audio.duration : 0;
 const formatTime = n => `${Math.floor(n / 60)}:${String(Math.floor(n % 60)).padStart(2, '0')}`;
 function cancelAdvance() { clearTimeout(advanceTimer); advanceTimer = null; }
@@ -58,66 +60,157 @@ function renderPlaylist() {
   $('previous').disabled = current <= 0;
   $('next').disabled = current < 0 || current >= tracks.length - 1;
 }
-async function loadWaveform(track, token) {
-  waveRequest = new AbortController();
+function pruneDownloads() {
+  const keep = new Set([tracks[current]?.url, tracks[current + 1]?.url]);
+  for (const [url, entry] of downloads) {
+    if (keep.has(url)) continue;
+    entry.controller.abort();
+    if (entry.objectURL) URL.revokeObjectURL(entry.objectURL);
+    downloads.delete(url);
+  }
+}
+function getDownload(track) {
+  if (downloads.has(track.url)) return downloads.get(track.url);
+  const entry = {controller: new AbortController(), blob: null, objectURL: null, waveform: null};
+  downloads.set(track.url, entry);
+  entry.ready = (async () => {
+    const response = await fetch(track.url, {signal: entry.controller.signal});
+    if (!response.ok) throw new Error('Could not download audio');
+    const total = Number(response.headers.get('Content-Length'));
+    const reader = response.body.getReader();
+    const chunks = [];
+    let received = 0;
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      chunks.push(value); received += value.byteLength;
+      if (tracks[current]?.url === track.url && loading) {
+        const progress = total ? `${Math.floor(received / total * 100)}%` : `${(received / 1048576).toFixed(1)} MB`;
+        $('status').textContent = `Downloading audio… ${progress}`;
+      }
+    }
+    if (!received) throw new Error('Empty audio file');
+    entry.blob = new Blob(chunks, {type: response.headers.get('Content-Type') || 'application/octet-stream'});
+    return entry;
+  })().catch(error => {
+    if (downloads.get(track.url) === entry) downloads.delete(track.url);
+    throw error;
+  });
+  return entry;
+}
+function prefetchNext() {
+  const track = tracks[current + 1];
+  if (track) getDownload(track).ready.catch(() => {}); // Retry on selection if a prefetch failed.
+}
+async function loadWaveform(entry, token) {
   try {
-    const response = await fetch(track.url, {signal: waveRequest.signal});
-    if (!response.ok) throw new Error('Could not load audio');
-    const bytes = await response.arrayBuffer();
-    if (token !== generation) return;
-    audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
-    const buffer = await audioContext.decodeAudioData(bytes);
-    if (token !== generation) return;
-    const channels = Array.from({length: buffer.numberOfChannels}, (_, i) => buffer.getChannelData(i));
-    const bucketSize = Math.max(1, Math.ceil(buffer.length / 2400));
-    peaks = [];
-    for (let start = 0; start < buffer.length; start += bucketSize) {
-      let peak = 0, sum = 0, n = 0;
-      for (const channel of channels) {
-        for (let i = start; i < Math.min(start + bucketSize, buffer.length); i++) {
-          peak = Math.max(peak, Math.abs(channel[i])); sum += channel[i] * channel[i]; n++;
+    if (!entry.waveform) {
+      // Decode the SAME downloaded Blob used for playback. An offline context
+      // needs no audio output/device permission or running AudioContext.
+      const OfflineContext = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      const decoder = new OfflineContext(1, 1, 22050);
+      const buffer = await decoder.decodeAudioData(await entry.blob.arrayBuffer());
+      if (token !== generation) return;
+      const channels = Array.from({length: buffer.numberOfChannels}, (_, i) => buffer.getChannelData(i));
+      const bucketSize = Math.max(1, Math.ceil(buffer.length / 2400));
+      const result = [];
+      for (let start = 0; start < buffer.length; start += bucketSize) {
+        let peak = 0, sum = 0, n = 0;
+        for (const channel of channels) {
+          for (let i = start; i < Math.min(start + bucketSize, buffer.length); i++) {
+            peak = Math.max(peak, Math.abs(channel[i])); sum += channel[i] * channel[i]; n++;
+          }
+        }
+        result.push([peak, Math.sqrt(sum / n)]);
+        // Let touch controls and painting run while reducing a long track.
+        if (result.length % 200 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 0));
+          if (token !== generation) return;
         }
       }
-      peaks.push([peak, Math.sqrt(sum / n)]);
+      entry.waveform = result;
+      // The full decoded PCM buffer can now be garbage-collected.
     }
-    $('status').textContent = 'Click or drag the waveform to seek.';
+    if (token !== generation) return;
+    peaks = entry.waveform;
+    $('wave-status').textContent = 'Click or drag the waveform to seek.';
     draw();
   } catch (error) {
-    if (token === generation && error.name !== 'AbortError') $('status').textContent = 'Waveform unavailable in this browser. You can still seek using the timeline.';
+    if (token === generation) {
+      console.warn('Waveform decoding failed:', error);
+      $('wave-status').textContent = 'Waveform unavailable in this browser. The timeline still works.';
+    }
   }
 }
 async function play() {
   cancelAdvance();
+  wantsPlay = true;
+  if (loading) { $('play').textContent = 'Pause'; return; }
   const token = generation;
   try { await audio.play(); }
   catch (error) {
-    if (token === generation && error.name !== 'AbortError') $('status').textContent = 'Playback could not start. Press Play to retry, or choose another track.';
+    if (token === generation && error.name !== 'AbortError') {
+      wantsPlay = false; $('play').textContent = 'Play';
+      $('status').textContent = 'Playback could not start. Press Play to retry, or choose another track.';
+    }
   }
 }
-function selectTrack(index, autoplay) {
+async function selectTrack(index, autoplay) {
   if (index < 0 || index >= tracks.length) return;
-  cancelAdvance(); waveRequest?.abort(); generation++;
-  audio.pause(); current = index; peaks = null;
-  audio.src = tracks[index].url;
+  cancelAdvance();
+  // Reselecting a loaded song reuses its Blob and waveform without downloading.
+  if (index === current && audio.getAttribute('src')) {
+    audio.currentTime = 0;
+    if (autoplay) play();
+    return;
+  }
+  const token = ++generation;
+  audio.pause(); audio.removeAttribute('src'); audio.load();
+  current = index; peaks = null; loading = true; wantsPlay = autoplay;
+  pruneDownloads();
   $('title').textContent = tracks[index].name;
   $('position').textContent = `TRACK ${index + 1} OF ${tracks.length}`;
-  $('status').textContent = 'Loading waveform…';
+  $('status').textContent = 'Preparing audio for download…';
+  $('wave-status').textContent = 'Waveform will appear after the download.';
+  $('play').textContent = wantsPlay ? 'Pause' : 'Play';
   renderPlaylist(); updateTime();
-  loadWaveform(tracks[index], generation);
-  if (autoplay) play();
+  try {
+    const entry = await getDownload(tracks[index]).ready;
+    if (token !== generation) return;
+    entry.objectURL ||= URL.createObjectURL(entry.blob);
+    audio.src = entry.objectURL;
+    loading = false;
+    $('status').textContent = 'Loaded into memory. Ready to play.';
+    $('wave-status').textContent = 'Drawing waveform…';
+    loadWaveform(entry, token);
+    if (wantsPlay) play();
+    prefetchNext();
+  } catch (error) {
+    if (token !== generation || error.name === 'AbortError') return;
+    loading = false; wantsPlay = false; $('play').textContent = 'Retry';
+    $('status').textContent = 'Download failed. Press Retry; check the connection and server log.';
+    $('wave-status').textContent = '';
+  }
 }
 $('play').onclick = () => {
-  if (advanceTimer !== null) { cancelAdvance(); $('play').textContent = 'Play'; $('status').textContent = 'Paused between tracks.'; }
-  else if (audio.paused) play(); else audio.pause();
+  if (advanceTimer !== null) {
+    cancelAdvance(); wantsPlay = false; $('play').textContent = 'Play'; $('status').textContent = 'Paused between tracks.';
+  } else if (loading) {
+    wantsPlay = !wantsPlay; $('play').textContent = wantsPlay ? 'Pause' : 'Play';
+  } else if (!audio.getAttribute('src')) selectTrack(current, true);
+  else if (audio.paused) play();
+  else { wantsPlay = false; audio.pause(); }
 };
 $('previous').onclick = () => selectTrack(current - 1, true);
 $('next').onclick = () => selectTrack(current + 1, true);
 $('volume').oninput = e => { audio.volume = Number(e.target.value); };
 $('seek').oninput = e => { cancelAdvance(); if (duration()) audio.currentTime = Number(e.target.value) / 1000 * duration(); updateTime(); };
 audio.addEventListener('play', () => { $('play').textContent = 'Pause'; });
-audio.addEventListener('pause', () => { $('play').textContent = 'Play'; });
+audio.addEventListener('pause', () => { if (!loading) $('play').textContent = 'Play'; });
+audio.addEventListener('waiting', () => { if (!audio.paused) $('status').textContent = 'Buffering audio…'; });
+audio.addEventListener('playing', () => { $('status').textContent = 'Playing from memory.'; });
 for (const event of ['timeupdate', 'loadedmetadata', 'durationchange', 'emptied']) audio.addEventListener(event, updateTime);
-audio.addEventListener('error', () => { cancelAdvance(); $('status').textContent = 'Cannot play this file. Check browser codec support or select another track.'; });
+audio.addEventListener('error', () => { cancelAdvance(); $('status').textContent = 'Cannot play this file. Check the server log or select another track.'; });
 audio.addEventListener('ended', () => {
   if (current < tracks.length - 1) {
     $('status').textContent = 'Next track in 1 second…'; $('play').textContent = 'Pause';
@@ -140,12 +233,14 @@ async function refresh() {
     current = tracks.findIndex(track => track.url === selectedURL);
     if (current < 0 && tracks.length) selectTrack(0, false);
     else if (current < 0) {
-      generation++; waveRequest?.abort(); audio.pause(); audio.removeAttribute('src'); audio.load(); peaks = null;
+      generation++; loading = false; wantsPlay = false; audio.pause(); audio.removeAttribute('src'); audio.load(); peaks = null; pruneDownloads();
       $('title').textContent = 'Your music, right here.'; $('position').textContent = 'NOW PLAYING';
-      $('status').textContent = 'Your library is empty.'; updateTime();
+      $('status').textContent = 'Your library is empty.'; $('wave-status').textContent = ''; updateTime();
     } else {
       $('position').textContent = `TRACK ${current + 1} OF ${tracks.length}`;
-      $('play').textContent = audio.paused ? 'Play' : 'Pause';
+      $('play').textContent = (loading ? wantsPlay : !audio.paused) ? 'Pause' : 'Play';
+      pruneDownloads();
+      if (!loading) prefetchNext();
     }
     renderPlaylist();
   } catch { $('status').textContent = 'Could not load the library. Try refreshing.'; }

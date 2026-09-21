@@ -15,7 +15,8 @@
 <div class="time"><span id="elapsed">0:00</span><span id="duration">0:00</span></div>
 <div class="controls"><button id="previous" aria-label="Previous track" disabled>⏮</button><button id="play" disabled>Play</button><button id="next" aria-label="Next track" disabled>⏭</button><label class="volume">Volume <input id="volume" type="range" min="0" max="1" step="0.01" value="1"></label></div>
 <p id="status" role="status">Loading library…</p>
-<audio id="audio" preload="metadata"></audio>
+<p id="wave-status" role="status"></p>
+<audio id="audio" preload="auto"></audio>
 </section>
 <section class="library" aria-label="Playlist"><div class="library-heading"><h2>Playlist</h2><span id="count">0 tracks</span></div><ol id="tracks"></ol><p id="empty" hidden>Drop WAV, OGG, MP3, FLAC or Opus files into <code>data/</code>, then refresh the library.</p></section>
 <footer>One track at a time. A second to breathe between them.</footer>

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -28,11 +29,16 @@ type track struct {
 
 func handler(data string) http.Handler {
 	mux := http.NewServeMux()
+	cache := newMediaCache(data)
+	mux.HandleFunc("GET /stream/{name...}", func(w http.ResponseWriter, r *http.Request) { cache.serve(w, r) })
 	mux.HandleFunc("GET /api/tracks", func(w http.ResponseWriter, r *http.Request) {
 		tracks := []track{}
 		err := filepath.WalkDir(data, func(path string, entry fs.DirEntry, err error) error {
 			if err != nil {
 				return err
+			}
+			if entry.IsDir() && entry.Name() == ".cache" {
+				return filepath.SkipDir
 			}
 			if entry.IsDir() || !entry.Type().IsRegular() {
 				return nil
@@ -45,7 +51,19 @@ func handler(data string) http.Handler {
 				return err
 			}
 			name = filepath.ToSlash(name)
-			tracks = append(tracks, track{name, (&url.URL{Path: "/audio/" + name}).String()})
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			version := "v=" + mediaKey(path, info)
+			prefix := "/audio/"
+			if compressed(name) {
+				prefix = "/stream/"
+			}
+			tracks = append(tracks, track{
+				Name: name,
+				URL:  (&url.URL{Path: prefix + name, RawQuery: version}).String(),
+			})
 			return nil
 		})
 		if err != nil {
@@ -71,11 +89,18 @@ func handler(data string) http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	mux.Handle("GET /", http.FileServer(http.FS(web)))
+	static := http.FileServer(http.FS(web))
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		static.ServeHTTP(w, r)
+	})
 	return mux
 }
 
 func main() {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		log.Fatal("FFmpeg is required to compress WAV/FLAC files. Install ffmpeg and run again.")
+	}
 	if err := os.MkdirAll("data", 0755); err != nil {
 		log.Fatal(err)
 	}
