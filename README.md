@@ -6,6 +6,10 @@ I made this so I can put the results of my AI slop music generation experiments 
 
 The backend is Go using only the standard library. The frontend is HTML, CSS and plain JavaScript, with a custom waveform player. FFmpeg compresses large audio files for easier listening over Wi-Fi.
 
+## Built with AI
+
+Built with **GPT 6 Astra**, using about **50% of a 5-hour usage limit**. From the initial commit to the completed application, README and licence, this took **53 minutes 29 seconds of wall-clock time** on 21 September 2026.
+
 ## Get it running
 
 You need **Go 1.22 or later** and **FFmpeg** on the computer serving the music. FFmpeg must be on your PATH and include its usual MP3 encoder. On Debian/Ubuntu, install it with `sudo apt install ffmpeg`.
