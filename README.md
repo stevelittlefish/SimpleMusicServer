@@ -1,37 +1,94 @@
 # SimpleMusicServer
 
-A tiny music player: Go standard library backend, HTML/CSS and plain JavaScript frontend. No Go or JavaScript dependencies, build tools, accounts or configuration. **FFmpeg** is the only external runtime dependency.
+Drop music into a folder and listen to it on another device over your local network.
 
-Requires Go 1.22+ and `ffmpeg` (with the usual MP3 encoder) on your PATH. For example, on Debian/Ubuntu: `sudo apt install ffmpeg`.
+I made this so I can put the results of my AI slop music generation experiments in a folder on my computer, then listen to them on a tablet in the kitchen while I make dinner. The computer handles the files; the tablet supplies the soundtrack to whatever is happening to the onions.
+
+The backend is Go using only the standard library. The frontend is HTML, CSS and plain JavaScript, with a custom waveform player. FFmpeg compresses large audio files for easier listening over Wi-Fi.
+
+## Get it running
+
+You need **Go 1.22 or later** and **FFmpeg** on the computer serving the music. FFmpeg must be on your PATH and include its usual MP3 encoder. On Debian/Ubuntu, install it with `sudo apt install ffmpeg`.
+
+```sh
+git clone https://github.com/stevelittlefish/SimpleMusicServer.git
+cd SimpleMusicServer
+mkdir -p data
+```
+
+Copy your music into `data/`, then start the server:
 
 ```sh
 ./run.sh
 ```
 
-Put music in `data/` (created automatically). Open **http://localhost:6069**, or **http://<server-ip>:6069** from another device. The server binds to `0.0.0.0:6069`.
+The server also creates `data/` automatically if it doesn't exist. Leave it running while you listen; press **Ctrl+C** in that terminal to stop it.
 
-- WAV, OGG, MP3, FLAC and Opus files, including subfolders and uppercase extensions.
-- Click **Refresh library** after adding or removing files. Tracks sort by filename.
-- Select a track, play/pause, adjust volume, or click/drag the waveform to seek. The waveform also supports keyboard seeking with arrow keys, Home and End.
-- Playback advances after a one-second gap and stops after the last track. Previous/next buttons switch immediately; a track that hasn't downloaded yet waits until it is ready.
-- All audio files and the entire `data/` folder are gitignored.
+## Listen in the kitchen
 
-## Playback and caching
+1. Connect the tablet to the same local network as the computer.
+2. Open `http://<computer-ip>:6069` in the tablet's browser. For example, if the computer's local IP address is `192.168.1.42`, open `http://192.168.1.42:6069`.
+3. Tap a track in the playlist. The first load may take a moment while it is compressed and downloaded.
+4. Make dinner. The next track starts automatically after a one-second pause.
 
-The server converts WAV and FLAC files to **192 kbps stereo MP3** on first request and caches the result in `data/.cache/`. Originals are never modified. MP3, OGG and Opus files are served as-is. Updated source files get new cache URLs automatically; old cache files can be deleted whenever you want to reclaim disk space. The `.cache` directory never appears in the playlist.
+On the computer itself, open [http://localhost:6069](http://localhost:6069). On the tablet, use the **computer's IP address**, since `localhost` would mean the tablet itself. On Linux, `hostname -I` can help you find the computer's local IP address.
 
-The client downloads each selected track **once in full**, keeps it as a Blob, and uses that same Blob for both audio playback and waveform decoding. The player shows download progress before starting. Once loaded, playback and seeking don't need the network. The next track downloads in the background after the current file is loaded, ready for the one-second transition. Only the current and next files are retained; revisiting an older track may require another download (or use the browser's HTTP cache).
+The server listens on **0.0.0.0:6069**, making it accessible over your network. If the tablet cannot reach it, check that the computer is still running the server and that its firewall allows TCP port 6069.
 
-Waveforms use a lower sample rate in an offline audio context to reduce memory use and avoid needing a running audio context. Decoded PCM is released after the small peak/RMS envelope is built. Very long files can still take time and memory to decode; playback remains available if waveform decoding fails. The cyan peak/RMS design is inspired by the edit-page widgets in [the_sing_thing](https://git.seaslug.io/steve/the_sing_thing).
+## Add music and use the player
 
-First playback can take longer while the server compresses a file and the client downloads it. Later playback reuses the server's cached MP3. For the 48 kHz, 32-bit stereo WAV format, the download is roughly 16 times smaller.
+Supported files: **WAV, OGG, MP3, FLAC and Opus**. Subfolders and uppercase extensions work too.
 
-Run `go test ./...` for HTTP and transcoding/cache checks (transcoding tests use FFmpeg). `go test -race ./...` checks concurrent requests. Static assets are embedded: `go build -o simplemusicserver .` produces an executable that still needs FFmpeg available at runtime. The data folder is relative to the working directory; `run.sh` switches to the project root automatically.
+```text
+data/
+  suspiciously-catchy.wav
+  another-experiment.flac
+  dinner-mix/
+    definitely-a-song.mp3
+```
 
-Optional browser regression checks use Node 22+ and a Chrome-family browser started with `--remote-debugging-port=9227`:
+- Add or remove files, then tap **Refresh library**. There's no need to restart the server.
+- The playlist runs in filename order. Use prefixes such as `01-`, `02-`, etc. if you want a particular order.
+- Tap any track to select it. Use **Play/Pause**, **Previous**, **Next**, and the volume slider to control playback.
+- Tap or drag the waveform to skip around. With a keyboard, focus the timeline and use the arrow keys, Home or End.
+- Playback stops after the final track.
+
+The whole `data/` folder and all supported audio file extensions are gitignored, so your experimental back catalogue stays out of the repository.
+
+## How playback works
+
+Large WAV and FLAC files are converted to **192 kbps stereo MP3** on the server. The originals stay untouched. MP3, OGG and Opus files are served as they are.
+
+Converted files are saved in `data/.cache/` and reused, including after a server restart. Changing a source file causes a fresh conversion on its next request. You can delete the cache to reclaim space; it will be rebuilt as needed.
+
+The tablet downloads the **entire selected file once** and uses that same in-memory copy for both playback and waveform generation. Once the download finishes, playback and seeking no longer depend on the connection keeping up. Download progress is shown in the player.
+
+The next track downloads in the background, ready for the one-second transition. If it isn't ready in time, playback waits for its download to finish. Only the current and next files are retained in the player's memory; returning to an older track may require another download.
+
+The first listen takes longer because of conversion and downloading. A 48 kHz, 32-bit stereo WAV becomes roughly 16 times smaller at 192 kbps. Waveforms are decoded at a lower sample rate to reduce memory use, and the decoded samples are released once the peaks are calculated. Very long files can still take time and memory to process; the timeline remains usable if waveform decoding fails.
+
+The waveform's cyan peak-and-RMS design was inspired by the edit-page players in [the_sing_thing](https://git.seaslug.io/steve/the_sing_thing).
+
+## Development
+
+```sh
+go test ./...
+go test -race ./...
+go build -o simplemusicserver .
+```
+
+The HTML, CSS and JavaScript are embedded in the executable. FFmpeg is still needed at runtime. The data folder is relative to the working directory; `run.sh` switches to the project root automatically. Restart the server after changing the code or frontend assets.
+
+Optional browser checks need Node 22+ and a Chrome-family browser started with `--remote-debugging-port=9227`:
 
 ```sh
 SMS_BROWSER_TEST=1 go test -run TestBrowserPlayback -v
 ```
 
-These checks use a temporary library and cover a throttled connection, single downloads, waveform decoding, offline playback/seeking, playlist transitions, failed-download retries, and track-switch cancellation. Set `SMS_BROWSER_SAMPLE=/absolute/path/to/file.wav` to additionally test a copy of a real WAV at normal network speed.
+They use a temporary library to check throttled downloads, waveform generation, offline playback and seeking, playlist transitions, retries, and track switching. Set `SMS_BROWSER_SAMPLE=/absolute/path/to/file.wav` to test a copy of a real WAV at normal network speed.
+
+## Licence
+
+Released under the **DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE, Version 2**. See [LICENCE](LICENCE) for the complete, highly serious corporate legal framework, obviously carefully designed by a crack team of lawyers.
+
+The licence text is copied from [comfyui-avatar-generator](https://github.com/stevelittlefish/comfyui-avatar-generator/blob/main/LICENCE).
