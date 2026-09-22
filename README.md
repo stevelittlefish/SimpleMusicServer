@@ -54,6 +54,7 @@ data/
 - Add or remove files, then tap **Refresh library**. There's no need to restart the server.
 - The playlist runs in filename order. Use prefixes such as `01-`, `02-`, etc. if you want a particular order.
 - Tap any track to select it. Use **Play/Pause**, **Previous**, **Next**, and the volume slider to control playback.
+- Press **Space** to play/pause or **0** to seek to the start of the current track.
 - Tap or drag the waveform to skip around. With a keyboard, focus the timeline and use the arrow keys, Home or End.
 - Playback stops after the final track.
 

@@ -205,6 +205,22 @@ $('previous').onclick = () => selectTrack(current - 1, true);
 $('next').onclick = () => selectTrack(current + 1, true);
 $('volume').oninput = e => { audio.volume = Number(e.target.value); };
 $('seek').oninput = e => { cancelAdvance(); if (duration()) audio.currentTime = Number(e.target.value) / 1000 * duration(); updateTime(); };
+document.addEventListener('keydown', event => {
+  if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  if (event.target.isContentEditable || event.target.closest('input:not([type="range"]), textarea, select')) return;
+  if (current < 0 || (event.key !== ' ' && event.key !== '0')) return;
+  // Prevent scrolling or a focused button's native Space activation.
+  event.preventDefault();
+  if (event.repeat) return;
+  if (event.key === ' ') $('play').click();
+  else if (duration()) {
+    cancelAdvance();
+    audio.currentTime = 0;
+    $('play').textContent = audio.paused ? 'Play' : 'Pause';
+    if (audio.paused) $('status').textContent = 'Ready to play.';
+    updateTime();
+  }
+});
 audio.addEventListener('play', () => { $('play').textContent = 'Pause'; });
 audio.addEventListener('pause', () => { if (!loading) $('play').textContent = 'Play'; });
 audio.addEventListener('waiting', () => { if (!audio.paused) $('status').textContent = 'Buffering audio…'; });
